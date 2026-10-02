@@ -1,0 +1,92 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'com.cryptography'
+version = '1.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+application {
+    mainClass = 'com.cryptography.Main'
+}
+
+dependencies {
+    implementation 'org.slf4j:slf4j-api:2.0.17'
+    implementation 'ch.qos.logback:logback-classic:1.5.17'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testImplementation 'org.junit.jupiter:junit-jupiter-params:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+tasks.register('cryptFile', JavaExec) {
+    group = 'application'
+    description = 'Шифрует и расшифровывает файл последней парой ключей из папки Keys'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.cryptography.FileCryptoDemo'
+    workingDir = projectDir
+}
+
+tasks.register('rsaAttacks', JavaExec) {
+    group = 'application'
+    description = 'Показывает восемь учебных атак RSA на Hello World со слабыми ключами в памяти'
+    classpath = sourceSets.main.output.classesDirs + configurations.runtimeClasspath
+    mainClass = 'com.cryptography.RsaAttackDemo'
+}
+
+tasks.register('rsaKeyAttackTest', Test) {
+    group = 'verification'
+    description = 'Измеряет атаку Ферма на Hello World; по умолчанию 180 с, длительность задаёт rsaAttackSeconds'
+    def attackSeconds = providers.gradleProperty('rsaAttackSeconds').map { value ->
+        if (!(value ==~ /[0-9]+/) || value.length() > 4 || value.toInteger() < 1 || value.toInteger() > 3600) {
+            throw new GradleException('rsaAttackSeconds: укажите целое число от 1 до 3600 секунд (по умолчанию 180)')
+        }
+        value.toInteger()
+    }.getOrElse(180)
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.output.classesDirs + sourceSets.main.output.classesDirs + configurations.testRuntimeClasspath
+    useJUnitPlatform {
+        includeTags 'rsa-key-benchmark'
+    }
+    filter {
+        includeTestsMatching 'com.cryptography.rsa.RsaPublicKeyAttackTest'
+    }
+    systemProperty 'rsa.attack.enabled', 'true'
+    systemProperty 'rsa.attack.seconds', attackSeconds
+    systemProperty 'rsa.attack.threads', providers.gradleProperty('rsaAttackThreads').getOrElse('auto')
+    systemProperty 'rsa.publicKey', providers.gradleProperty('rsaPublicKey').getOrElse('')
+    workingDir = projectDir
+    maxParallelForks = 1
+    maxHeapSize = '2g'
+    // 20 секунд резерва внутри JUnit и ещё 10 секунд на запуск/остановку тестового процесса.
+    timeout = java.time.Duration.ofSeconds(attackSeconds + 30L)
+    outputs.upToDateWhen { false }
+    testLogging {
+        showStandardStreams = true
+        events 'passed', 'failed', 'skipped'
+    }
+    doFirst {
+        if (!providers.gradleProperty('rsaPublicKey').isPresent()) {
+            throw new GradleException('Укажите -PrsaPublicKey=Keys/<имя>_public.key')
+        }
+    }
+}
+
+// Зашифрованные и расшифрованные файлы лежат рядом с оригиналом в resources,
+// но в сборку (jar) попадать не должны: это результаты демо по ~10 МБ
+processResources {
+    exclude '**/*.enc', '**/*.decrypted.*'
+}
